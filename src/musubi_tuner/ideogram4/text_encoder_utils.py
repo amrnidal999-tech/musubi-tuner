@@ -1,7 +1,9 @@
+from pathlib import Path
 from typing import List, Tuple
 
 import torch
-from transformers import AutoModel, AutoTokenizer
+from safetensors.torch import load_file
+from transformers import AutoConfig, AutoModel, AutoTokenizer
 
 from musubi_tuner.ideogram4.pipeline import get_qwen3_vl_features, pad_text_features
 
@@ -17,18 +19,59 @@ def load_qwen3_vl_text_encoder(
     """
     Load the frozen Qwen3-VL text encoder used by Ideogram4.
 
+    Accepts either:
+      - A HuggingFace model ID or local directory (standard from_pretrained path)
+      - A single .safetensors file (e.g. Comfy-Org/Qwen3-VL qwen3vl_8b_bf16.safetensors)
+        In this case the model architecture/config/tokenizer are loaded from HF
+        (tiny JSON files only, no weight download) and the weights come from the
+        local safetensors file.
+
     Ideogram4 does not use Qwen3-VL to generate text.
     It uses hidden states from Qwen3-VL as prompt-conditioning features.
     """
-    print(f"Loading Qwen3-VL tokenizer from: {text_encoder_path}")
-    tokenizer = AutoTokenizer.from_pretrained(text_encoder_path)
+    path = Path(text_encoder_path)
+    single_file = path.is_file() and path.suffix == ".safetensors"
 
-    print(f"Loading Qwen3-VL text encoder from: {text_encoder_path}")
-    text_encoder = AutoModel.from_pretrained(
-        text_encoder_path,
-        torch_dtype=dtype,
-        device_map=device_map,
-    )
+    # Config/tokenizer source: HF for single-file mode, local/HF-ID otherwise.
+    config_source = DEFAULT_QWEN3_VL_PATH if single_file else text_encoder_path
+
+    print(f"Loading Qwen3-VL tokenizer from: {config_source}")
+    tokenizer = AutoTokenizer.from_pretrained(config_source)
+
+    if single_file:
+        print(f"Single-file safetensors detected.")
+        print(f"  Config source : {config_source} (HF — config JSON only, no weights)")
+        print(f"  Weights source: {text_encoder_path}")
+
+        config = AutoConfig.from_pretrained(config_source)
+
+        # Build the model skeleton (random weights, no HF download of model weights).
+        text_encoder = AutoModel.from_config(config, torch_dtype=dtype)
+
+        # Load the consolidated safetensors weights.
+        print(f"  Loading state dict from safetensors...")
+        state_dict = load_file(str(path), device="cpu")
+        missing, unexpected = text_encoder.load_state_dict(state_dict, strict=False)
+        if missing:
+            print(f"  Warning: {len(missing)} missing keys — first few: {missing[:3]}")
+        if unexpected:
+            print(f"  Warning: {len(unexpected)} unexpected keys — first few: {unexpected[:3]}")
+
+        text_encoder = text_encoder.to(dtype)
+
+        # Device placement.
+        if device_map == "auto":
+            if torch.cuda.is_available():
+                text_encoder = text_encoder.cuda()
+        elif isinstance(device_map, (str, torch.device)):
+            text_encoder = text_encoder.to(device_map)
+    else:
+        print(f"Loading Qwen3-VL text encoder from: {text_encoder_path}")
+        text_encoder = AutoModel.from_pretrained(
+            text_encoder_path,
+            torch_dtype=dtype,
+            device_map=device_map,
+        )
 
     text_encoder.eval()
     text_encoder.requires_grad_(False)
