@@ -46,16 +46,32 @@ def load_qwen3_vl_text_encoder(
         config = AutoConfig.from_pretrained(config_source)
 
         # Build the model skeleton (random weights, no HF download of model weights).
-        text_encoder = AutoModel.from_config(config, torch_dtype=dtype)
+        text_encoder = AutoModel.from_config(config, dtype=dtype)
 
         # Load the consolidated safetensors weights.
         print(f"  Loading state dict from safetensors...")
         state_dict = load_file(str(path), device="cpu")
+
+        # Comfy-Org text encoder files store LM weights without the
+        # 'language_model.' prefix that transformers' Qwen3-VL expects.
+        # Remap: model.* / lm_head.* -> language_model.model.* / language_model.lm_head.*
+        # Visual encoder keys are absent (not needed for text-only encoding).
+        first_keys = list(state_dict.keys())[:5]
+        needs_remap = any(k.startswith("model.") or k.startswith("lm_head.") for k in first_keys)
+        if needs_remap:
+            print(f"  Remapping Comfy-Org key format (adding 'language_model.' prefix)...")
+            state_dict = {
+                (f"language_model.{k}" if k.startswith("model.") or k.startswith("lm_head.") else k): v
+                for k, v in state_dict.items()
+            }
+
         missing, unexpected = text_encoder.load_state_dict(state_dict, strict=False)
-        if missing:
-            print(f"  Warning: {len(missing)} missing keys — first few: {missing[:3]}")
-        if unexpected:
-            print(f"  Warning: {len(unexpected)} unexpected keys — first few: {unexpected[:3]}")
+        # After remapping, only visual encoder keys will be missing (not used for text encoding).
+        lm_missing = [k for k in missing if not k.startswith("visual.")]
+        if lm_missing:
+            print(f"  Warning: {len(lm_missing)} non-visual missing keys — first few: {lm_missing[:3]}")
+        else:
+            print(f"  Language model weights loaded OK ({len(missing)} visual keys skipped — not needed).")
 
         text_encoder = text_encoder.to(dtype)
 
