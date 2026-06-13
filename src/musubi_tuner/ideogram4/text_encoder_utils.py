@@ -52,25 +52,42 @@ def load_qwen3_vl_text_encoder(
         print(f"  Loading state dict from safetensors...")
         state_dict = load_file(str(path), device="cpu")
 
-        # Comfy-Org text encoder files store LM weights without the
-        # 'language_model.' prefix that transformers' Qwen3-VL expects.
-        # Remap: model.* / lm_head.* -> language_model.model.* / language_model.lm_head.*
-        # Visual encoder keys are absent (not needed for text-only encoding).
+        # Comfy-Org single-file text encoders use a different key layout than
+        # transformers' Qwen3VLForConditionalGeneration AutoModel expects.
+        # Normalize following the same logic as sdbds/musubi-tuner:
+        #   lm_head.weight           → drop (not needed for text encoding)
+        #   model.visual.*           → visual.*
+        #   model.language_model.*   → language_model.*
+        #   model.*                  → language_model.*  (strip "model.", prepend "language_model.")
+        #   anything else            → unchanged
+        def _normalize_keys(sd):
+            out = {}
+            for k, v in sd.items():
+                if k in ("lm_head.weight", "model.lm_head.weight", "language_model.lm_head.weight"):
+                    continue
+                if k.startswith("model.visual."):
+                    k = "visual." + k[len("model.visual."):]
+                elif k.startswith("model.language_model."):
+                    k = k[len("model."):]
+                elif k.startswith("model."):
+                    k = "language_model." + k[len("model."):]
+                out[k] = v
+            return out
+
         first_keys = list(state_dict.keys())[:5]
         needs_remap = any(k.startswith("model.") or k.startswith("lm_head.") for k in first_keys)
         if needs_remap:
-            print(f"  Remapping Comfy-Org key format (adding 'language_model.' prefix)...")
-            state_dict = {
-                (f"language_model.{k}" if k.startswith("model.") or k.startswith("lm_head.") else k): v
-                for k, v in state_dict.items()
-            }
+            print(f"  Remapping Comfy-Org key format...")
+            state_dict = _normalize_keys(state_dict)
 
-        missing, unexpected = text_encoder.load_state_dict(state_dict, strict=False)
-        # After remapping, only visual encoder keys will be missing (not used for text encoding).
+        missing, unexpected = text_encoder.load_state_dict(state_dict, strict=False, assign=True)
+        # After normalization only visual encoder keys should be missing — not needed for text encoding.
         lm_missing = [k for k in missing if not k.startswith("visual.")]
         if lm_missing:
             print(f"  Warning: {len(lm_missing)} non-visual missing keys — first few: {lm_missing[:3]}")
-        else:
+        if unexpected:
+            print(f"  Warning: {len(unexpected)} unexpected keys — first few: {unexpected[:3]}")
+        if not lm_missing and not unexpected:
             print(f"  Language model weights loaded OK ({len(missing)} visual keys skipped — not needed).")
 
         text_encoder = text_encoder.to(dtype)
