@@ -279,6 +279,7 @@ class Ideogram4Transformer2DModel(nn.Module):
         super().__init__()
         self.config = config
         self.gradient_checkpointing = False
+        self.activation_cpu_offloading = False
 
         head_dim = config.emb_dim // config.num_heads
 
@@ -325,11 +326,13 @@ class Ideogram4Transformer2DModel(nn.Module):
     def dtype(self) -> torch.dtype:
         return next(self.parameters()).dtype
 
-    def enable_gradient_checkpointing(self):
+    def enable_gradient_checkpointing(self, activation_cpu_offloading: bool = False):
         self.gradient_checkpointing = True
+        self.activation_cpu_offloading = activation_cpu_offloading
 
     def disable_gradient_checkpointing(self):
         self.gradient_checkpointing = False
+        self.activation_cpu_offloading = False
 
     def forward(
         self,
