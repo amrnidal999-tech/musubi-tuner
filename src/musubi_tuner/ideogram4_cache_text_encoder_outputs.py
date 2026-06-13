@@ -19,7 +19,12 @@ from musubi_tuner.dataset.cache_io import dtype_to_str
 def parse_args():
     parser = argparse.ArgumentParser(description="Cache Ideogram4 Qwen3-VL text encoder outputs")
 
-    parser.add_argument("--text_encoder", type=str, required=True, help="Path to Qwen3-VL-8B-Instruct folder")
+    parser.add_argument(
+        "--text_encoder",
+        type=str,
+        default="Qwen/Qwen3-VL-8B-Instruct",
+        help="Path to Qwen3-VL-8B-Instruct folder or HF model ID (default: Qwen/Qwen3-VL-8B-Instruct in bf16)",
+    )
     parser.add_argument("--dataset_config", type=str, default=None, help="Musubi dataset config TOML")
 
     # Backward-compatible standalone mode.
