@@ -7,6 +7,7 @@ sampling pipeline used to render preview images during training.
 
 from __future__ import annotations
 
+import inspect
 from typing import List, Optional
 
 import torch
@@ -84,13 +85,20 @@ def get_qwen3_vl_features(
     text_position_ids = position_ids_4d[0]
     mrope_position_ids = position_ids_4d[1:]
 
-    causal_mask = create_causal_mask(
-        config=language_model.config,
-        inputs_embeds=inputs_embeds,
-        attention_mask=attention_mask,
-        past_key_values=None,
-        position_ids=text_position_ids,
-    )
+    _sig = inspect.signature(create_causal_mask)
+    _kwargs = {
+        "config": language_model.config,
+        "attention_mask": attention_mask,
+        "past_key_values": None,
+        "position_ids": text_position_ids,
+    }
+    if "inputs_embeds" in _sig.parameters:
+        _kwargs["inputs_embeds"] = inputs_embeds
+    elif "input_embeds" in _sig.parameters:
+        _kwargs["input_embeds"] = inputs_embeds
+    if "cache_position" in _sig.parameters:
+        _kwargs["cache_position"] = torch.arange(token_ids.shape[1], dtype=torch.long, device=token_ids.device)
+    causal_mask = create_causal_mask(**_kwargs)
     position_embeddings = language_model.rotary_emb(inputs_embeds, mrope_position_ids)
 
     tap_set = set(QWEN3_VL_ACTIVATION_LAYERS)
